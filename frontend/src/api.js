@@ -23,6 +23,8 @@ export const api = {
     request('/documents', { method: 'POST', body: JSON.stringify({ title, content }) }),
   getDocument: (id) => request(`/documents/${id}`),
   deleteDocument: (id) => request(`/documents/${id}`, { method: 'DELETE' }),
+  searchDocument: (id, query) =>
+    request(`/documents/${id}/search?query=${encodeURIComponent(query)}`),
   getCooccurrence: (id, codeIds = null) => {
     const qs = codeIds && codeIds.length ? `?${codeIds.map((c) => `codes=${c}`).join('&')}` : ''
     return request(`/documents/${id}/cooccurrence${qs}`)
@@ -39,6 +41,8 @@ export const api = {
     request('/codings/preview', { method: 'POST', body: JSON.stringify(payload) }),
   createCoding: (payload) =>
     request('/codings', { method: 'POST', body: JSON.stringify(payload) }),
+  batchCreateCodings: (payload) =>
+    request('/codings/batch', { method: 'POST', body: JSON.stringify(payload) }),
   updateCoding: (id, payload) =>
     request(`/codings/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteCoding: (id) => request(`/codings/${id}`, { method: 'DELETE' }),

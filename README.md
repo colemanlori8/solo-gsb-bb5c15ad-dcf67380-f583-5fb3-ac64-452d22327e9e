@@ -31,6 +31,10 @@ docker compose up --build
   - **拆分 split**：沿新区间边界拆分外层编码；若新区间包含他者，则新区间自身绕开拆分；
   - **保留边界 keep**：不做调整，重叠 / 嵌套共存。
 - **编辑与删除**：侧栏标注列表支持定位（滚动 + 闪烁）、编辑（改区间或改编码，同样走冲突检测）、删除。
+- **检索批量编码**：右侧「检索批量编码」面板输入**字面关键词**（非正则），`GET /api/documents/{id}/search` 返回当前文档全部命中的稳定半开区间与前后文，**彼此重叠的命中也一并返回**（如 `aa` 在 `aaa` 中命中 `[0,2)` 与 `[1,3)`）；前端逐项勾选或全选，选择一个**既有编码**后批量提交——
+  - `POST /api/codings/batch` 在**单个事务**中先校验全部区间，任一非法（`end <= start` 或超出文本长度）即整批回滚、不落库；
+  - 校验通过后逐项写入：与既有标注**完全相同**（同编码、同区间）的项记为**跳过**，其余按 **keep（保留边界）** 原样写入，不做合并 / 拆分；
+  - 返回**新增与跳过明细**（跳过项附带既有标注 id），提交成功后正文高亮与编码计数随即刷新；单条标注的冲突检测与决策流程不受影响。
 - **编码筛选**：编码本复选框控制文本高亮、标注列表与共现矩阵的显示范围。
 - **编码共现视图**：正文区顶部切换到「编码共现」标签，按当前文档展示编码两两关系矩阵——
   - 计算口径：先分别**合并同一编码自身重叠或相邻（首尾相接）的半开区间**，再对每对编码求区间交集，保证共享字符不被重复计数；
@@ -62,12 +66,14 @@ npm run dev   # http://localhost:5173
 | GET | `/api/documents` | 文档列表 |
 | POST | `/api/documents` | 新建文档 `{title, content}` |
 | GET | `/api/documents/{id}` | 文档详情（含编码本与全部标注） |
+| GET | `/api/documents/{id}/search?query=…` | 字面关键词检索：返回全部命中的半开区间与前后文（含彼此重叠的命中） |
 | GET | `/api/documents/{id}/cooccurrence` | 编码两两共现统计，可带 `?codes=1&codes=2` 按编码筛选；返回每对编码合并后的共现字符数、片段数与原文摘录 |
 | GET | `/api/documents/{id}/export` | 导出 JSON（附件下载） |
 | GET / POST | `/api/codes` | 编码本列表 / 新建（重名返回 409） |
 | PUT / DELETE | `/api/codes/{id}` | 重命名、改色 / 删除（级联删除标注） |
 | POST | `/api/codings/preview` | 冲突预览 `{document_id, code_id, start, end, exclude_id?}` |
 | POST | `/api/codings` | 创建标注，可带 `resolution: keep\|merge\|split` |
+| POST | `/api/codings/batch` | 批量创建 `{document_id, code_id, items:[{start,end}…]}`：单事务校验全部区间，任一非法整批回滚（422）；完全相同的既有标注记为跳过，其余按 keep 写入；返回新增与跳过明细 |
 | PUT / DELETE | `/api/codings/{id}` | 修改（同样支持 resolution）/ 删除 |
 
 ## 项目结构
@@ -87,5 +93,5 @@ npm run dev   # http://localhost:5173
     ├── nginx.conf          # 静态托管 + /api 反向代理
     └── src/
         ├── App.jsx         # 状态编排与冲突决策流
-        └── components/     # TextView / CodingForm / ConflictDialog / Sidebar / CooccurrenceView
+        └── components/     # TextView / CodingForm / SearchBatchPanel / ConflictDialog / Sidebar / CooccurrenceView
 ```

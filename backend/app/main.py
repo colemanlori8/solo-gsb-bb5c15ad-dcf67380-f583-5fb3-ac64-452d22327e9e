@@ -64,6 +64,17 @@ class CodingUpdate(BaseModel):
     resolution: Resolution = "keep"
 
 
+class BatchCodingItem(BaseModel):
+    start: int = Field(ge=0)
+    end: int = Field(gt=0)
+
+
+class BatchCodingCreate(BaseModel):
+    document_id: int
+    code_id: int
+    items: list[BatchCodingItem] = Field(min_length=1, max_length=1000)
+
+
 # ---------- 应用 ----------
 
 @asynccontextmanager
@@ -162,6 +173,42 @@ def delete_document(document_id: int) -> Response:
         get_document_or_404(conn, document_id)
         conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
     return Response(status_code=204)
+
+
+# ---------- 关键词检索（批量编码用） ----------
+
+SEARCH_CONTEXT_CHARS = 20
+
+
+@app.get("/api/documents/{document_id}/search")
+def search_document(
+    document_id: int,
+    query: str = Query(min_length=1, max_length=200),
+) -> dict:
+    """在文档全文中检索字面关键词（非正则），返回全部命中的稳定半开区间。
+
+    彼此重叠的命中也一并返回（如 "aa" 在 "aaa" 中命中 [0,2) 与 [1,3)），
+    每项附带前后文片段，便于前端逐项确认后批量编码。
+    """
+    with get_db() as conn:
+        doc = get_document_or_404(conn, document_id)
+    content = doc["content"]
+    matches: list[dict] = []
+    pos = content.find(query)
+    while pos != -1:
+        end = pos + len(query)
+        matches.append(
+            {
+                "start": pos,
+                "end": end,
+                "text": content[pos:end],
+                "before": content[max(0, pos - SEARCH_CONTEXT_CHARS) : pos],
+                "after": content[end : end + SEARCH_CONTEXT_CHARS],
+            }
+        )
+        # 从下一字符继续找，保证重叠命中不被跳过
+        pos = content.find(query, pos + 1)
+    return {"document_id": document_id, "query": query, "matches": matches}
 
 
 # ---------- 编码本（codebook） ----------
@@ -306,6 +353,58 @@ def create_coding(body: CodingCreate) -> dict:
             body.resolution,
         )
         return {"ids": ids, "codings": list_codings(conn, body.document_id)}
+
+
+@app.post("/api/codings/batch", status_code=201)
+def create_codings_batch(body: BatchCodingCreate) -> dict:
+    """批量创建编码标注（单个事务）。
+
+    先在事务内校验全部区间：任一非法（end <= start 或超出文本长度）即抛 422，
+    整批回滚不落库。校验通过后逐项写入：
+      - 与既有标注完全相同（同编码、同区间）的项记为跳过（含本批先写入的项）；
+      - 其余按 keep 边界原样写入，不做合并 / 拆分调整。
+    返回新增与跳过明细及最新标注列表。
+    """
+    with get_db() as conn:
+        doc = get_document_or_404(conn, body.document_id)
+        get_code_or_404(conn, body.code_id)
+        length = len(doc["content"])
+        invalid = [
+            {"index": i, "start": it.start, "end": it.end}
+            for i, it in enumerate(body.items)
+            if not (it.start < it.end <= length)
+        ]
+        if invalid:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": f"存在 {len(invalid)} 个非法区间，整批未写入",
+                    "invalid": invalid,
+                },
+            )
+        id_by_key = {
+            (c["code_id"], c["start"], c["end"]): c["id"]
+            for c in list_codings(conn, body.document_id)
+        }
+        created: list[dict] = []
+        skipped: list[dict] = []
+        for it in body.items:
+            key = (body.code_id, it.start, it.end)
+            if key in id_by_key:
+                skipped.append(
+                    {"start": it.start, "end": it.end, "existing_id": id_by_key[key]}
+                )
+                continue
+            cur = conn.execute(
+                INSERT_CODING, (body.document_id, body.code_id, it.start, it.end)
+            )
+            id_by_key[key] = cur.lastrowid
+            created.append({"id": cur.lastrowid, "start": it.start, "end": it.end})
+        return {
+            "created": created,
+            "skipped": skipped,
+            "codings": list_codings(conn, body.document_id),
+        }
 
 
 @app.put("/api/codings/{coding_id}")

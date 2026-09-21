@@ -532,6 +532,155 @@ textarea:focus {
   color: var(--muted);
 }
 
+/* ---------- 检索批量编码面板 ---------- */
+
+.search-panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.search-bar {
+  display: flex;
+  gap: 8px;
+}
+
+.search-bar input {
+  flex: 1;
+  min-width: 0;
+}
+
+.search-bar .primary-btn {
+  flex: none;
+}
+
+.match-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.match-head label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  flex: none;
+}
+
+.match-stat {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.match-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.match-list li {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+
+.match-list li:has(input:checked) {
+  border-color: var(--accent);
+  background: #eff6ff;
+}
+
+.match-list label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.match-list input {
+  flex: none;
+  align-self: center;
+}
+
+.match-list code {
+  color: var(--muted);
+  font-size: 12px;
+  flex: none;
+}
+
+.match-ctx {
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.match-ctx mark {
+  background: #fde68a;
+  color: var(--text);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.apply-row {
+  display: flex;
+  gap: 8px;
+}
+
+.apply-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.apply-row .primary-btn {
+  flex: none;
+}
+
+.batch-result {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: #166534;
+}
+
+.batch-result ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 120px;
+  overflow: auto;
+}
+
+.batch-result li {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.batch-result code {
+  margin-right: 6px;
+}
+
 /* ---------- 侧栏 ---------- */
 
 .sidebar {

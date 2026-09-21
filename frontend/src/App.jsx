@@ -5,6 +5,7 @@ import CodingForm from './components/CodingForm'
 import ConflictDialog from './components/ConflictDialog'
 import Sidebar from './components/Sidebar'
 import CooccurrenceView from './components/CooccurrenceView'
+import SearchBatchPanel from './components/SearchBatchPanel'
 
 export default function App() {
   const [docs, setDocs] = useState([])
@@ -390,6 +391,12 @@ export default function App() {
             editing={editing}
             onSubmit={handleSubmit}
             onCancelEdit={() => setEditing(null)}
+          />
+          <SearchBatchPanel
+            docId={docId}
+            codes={codebook}
+            onApplied={refresh}
+            onError={showError}
           />
           <Sidebar
             codes={codebook}
