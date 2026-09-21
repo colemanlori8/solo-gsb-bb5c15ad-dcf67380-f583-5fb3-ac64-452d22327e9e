@@ -49,6 +49,20 @@ class PreviewRequest(BaseModel):
     exclude_id: int | None = None
 
 
+class BatchCodingRange(BaseModel):
+    """批量编码中的单个命中区间；keyword 用于服务端复核区间内容。"""
+
+    start: int = Field(ge=0)
+    end: int = Field(gt=0)
+    keyword: str = Field(min_length=1, max_length=200)
+
+
+class BatchCodingRequest(BaseModel):
+    document_id: int
+    code_id: int
+    ranges: list[BatchCodingRange] = Field(min_length=1, max_length=5000)
+
+
 class CodingCreate(BaseModel):
     document_id: int
     code_id: int
@@ -244,6 +258,80 @@ def preview_coding(body: PreviewRequest) -> dict:
         }
 
 
+# ---------- 字面检索 ----------
+
+SEARCH_CONTEXT_CHARS = 16
+SEARCH_MAX_HITS = 5000
+
+
+def find_literal_hits(content: str, keyword: str) -> list[tuple[int, int]]:
+    """返回关键词在全文中的全部字面命中（半开区间 [start, end)），包含彼此重叠的命中。"""
+    hits: list[tuple[int, int]] = []
+    pos = content.find(keyword)
+    while pos != -1:
+        hits.append((pos, pos + len(keyword)))
+        # 从 start+1 继续查找，保留相互重叠的命中（如关键词 "aa" 命中 "aaa" 两次）
+        pos = content.find(keyword, pos + 1)
+    return hits
+
+
+@app.get("/api/documents/{document_id}/search")
+def search_document(document_id: int, q: str = Query(..., max_length=200)) -> dict:
+    """字面关键词检索：返回当前文档全部命中的稳定半开区间与上下文。
+
+    查询参数 `q` 为字面关键词（非正则、区分大小写；按 trim 后非空校验，
+    但匹配按原始字符串进行）。命中按位置升序、区间端点稳定排序，
+    包含彼此重叠的命中。每项附带命中点左右各约 16 字上下文、原文切片，
+    以及与该命中重叠的既有编码（含完全相同者），供前端展示与默认勾选。
+    命中数超过 5000 时截断并返回 `truncated=true`。
+    """
+    if not q:
+        raise HTTPException(status_code=422, detail="关键词不能为空")
+    with get_db() as conn:
+        doc = get_document_or_404(conn, document_id)
+        content = doc["content"]
+        existing = list_codings(conn, document_id)
+
+    raw_hits = find_literal_hits(content, q)
+    truncated = len(raw_hits) > SEARCH_MAX_HITS
+    raw_hits = raw_hits[:SEARCH_MAX_HITS]
+    results = []
+    for index, (start, end) in enumerate(raw_hits):
+        ctx_s = max(0, start - SEARCH_CONTEXT_CHARS)
+        ctx_e = min(len(content), end + SEARCH_CONTEXT_CHARS)
+        overlaps = [
+            {
+                "id": c["id"],
+                "code_id": c["code_id"],
+                "code_name": c["code_name"],
+                "color": c["code_color"],
+                "start": c["start"],
+                "end": c["end"],
+                "identical": c["start"] == start and c["end"] == end,
+            }
+            for c in existing
+            if c["start"] < end and start < c["end"]
+        ]
+        results.append(
+            {
+                "index": index,
+                "start": start,
+                "end": end,
+                "text": content[start:end],
+                "context_before": content[ctx_s:start],
+                "context_after": content[end:ctx_e],
+                "overlaps": overlaps,
+            }
+        )
+    return {
+        "document_id": document_id,
+        "keyword": q,
+        "count": len(results),
+        "truncated": truncated,
+        "hits": results,
+    }
+
+
 # ---------- 编码的创建 / 修改 / 删除 ----------
 
 INSERT_CODING = (
@@ -306,6 +394,102 @@ def create_coding(body: CodingCreate) -> dict:
             body.resolution,
         )
         return {"ids": ids, "codings": list_codings(conn, body.document_id)}
+
+
+@app.post("/api/codings/batch")
+def batch_create_codings(body: BatchCodingRequest) -> dict:
+    """批量给检索命中区间写入同一既有编码，单事务、全部按 keep 边界写入。
+
+    - 先在同一事务内逐项校验：文档/编码存在、区间在全文范围内且 end>start、
+      区间原文必须与提交的字面 keyword 完全一致（防止陈旧偏移量）；
+    - 与既有标注 (document_id, code_id, start, end) 完全相同的项记为
+      skipped（reason="identical_existing"）；请求内重复区间记为
+      reason="duplicate_in_batch"，同样跳过；
+    - 其余项按 keep 直接插入，重叠 / 嵌套共存，不触发合并 / 拆分；
+    - 任一项非法即整体回滚、整批不落库（422，返回全部非法项明细）。
+    """
+    with get_db() as conn:
+        doc = get_document_or_404(conn, body.document_id)
+        get_code_or_404(conn, body.code_id)
+        content = doc["content"]
+
+        # ---- 阶段一：全部校验（不写入任何数据） ----
+        invalid: list[dict] = []
+        for i, item in enumerate(body.ranges):
+            reason = None
+            if item.end <= item.start:
+                reason = "end 必须大于 start"
+            elif item.end > len(content):
+                reason = "区间超出文本长度"
+            elif content[item.start : item.end] != item.keyword:
+                reason = "区间原文与关键词不一致（命中区间可能已失效）"
+            if reason:
+                invalid.append(
+                    {
+                        "index": i,
+                        "start": item.start,
+                        "end": item.end,
+                        "keyword": item.keyword,
+                        "reason": reason,
+                    }
+                )
+        if invalid:
+            # 上下文管理器会回滚；此处尚未执行任何写入
+            raise HTTPException(status_code=422, detail={"invalid": invalid})
+
+        # ---- 阶段二：去重并比对既有标注 ----
+        existing_keys = {
+            (c["start"], c["end"])
+            for c in list_codings(conn, body.document_id)
+            if c["code_id"] == body.code_id
+        }
+        created: list[dict] = []
+        skipped: list[dict] = []
+        seen: set[tuple[int, int]] = set()
+        for item in body.ranges:
+            key = (item.start, item.end)
+            if key in existing_keys:
+                skipped.append(
+                    {
+                        "start": item.start,
+                        "end": item.end,
+                        "text": item.keyword,
+                        "reason": "identical_existing",
+                    }
+                )
+                continue
+            if key in seen:
+                skipped.append(
+                    {
+                        "start": item.start,
+                        "end": item.end,
+                        "text": item.keyword,
+                        "reason": "duplicate_in_batch",
+                    }
+                )
+                continue
+            seen.add(key)
+            cur = conn.execute(
+                INSERT_CODING,
+                (body.document_id, body.code_id, item.start, item.end),
+            )
+            created.append(
+                {
+                    "id": cur.lastrowid,
+                    "start": item.start,
+                    "end": item.end,
+                    "text": item.keyword,
+                }
+            )
+        return {
+            "document_id": body.document_id,
+            "code_id": body.code_id,
+            "created": created,
+            "skipped": skipped,
+            "created_count": len(created),
+            "skipped_count": len(skipped),
+            "codings": list_codings(conn, body.document_id),
+        }
 
 
 @app.put("/api/codings/{coding_id}")

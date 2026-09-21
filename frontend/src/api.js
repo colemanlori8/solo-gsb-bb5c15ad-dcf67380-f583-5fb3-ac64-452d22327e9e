@@ -9,7 +9,23 @@ async function request(path, options = {}) {
     let detail = `${res.status} ${res.statusText}`
     try {
       const body = await res.json()
-      if (body.detail) detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail)
+      if (body.detail) {
+        if (typeof body.detail === 'string') {
+          detail = body.detail
+        } else if (Array.isArray(body.detail)) {
+          // Pydantic 校验错误
+          detail = body.detail.map((d) => d.msg || JSON.stringify(d)).join('；')
+        } else if (Array.isArray(body.detail.invalid)) {
+          // 批量提交：存在非法区间，整批未落库
+          detail =
+            `存在 ${body.detail.invalid.length} 个非法区间，整批未落库：` +
+            body.detail.invalid
+              .map((i) => `[${i.start}, ${i.end}) ${i.reason}`)
+              .join('；')
+        } else {
+          detail = JSON.stringify(body.detail)
+        }
+      }
     } catch { /* ignore */ }
     throw new Error(detail)
   }
@@ -27,6 +43,8 @@ export const api = {
     const qs = codeIds && codeIds.length ? `?${codeIds.map((c) => `codes=${c}`).join('&')}` : ''
     return request(`/documents/${id}/cooccurrence${qs}`)
   },
+  searchDocument: (id, keyword) =>
+    request(`/documents/${id}/search?q=${encodeURIComponent(keyword)}`),
 
   listCodes: () => request('/codes'),
   createCode: (name, color) =>
@@ -39,6 +57,8 @@ export const api = {
     request('/codings/preview', { method: 'POST', body: JSON.stringify(payload) }),
   createCoding: (payload) =>
     request('/codings', { method: 'POST', body: JSON.stringify(payload) }),
+  batchCreateCodings: (payload) =>
+    request('/codings/batch', { method: 'POST', body: JSON.stringify(payload) }),
   updateCoding: (id, payload) =>
     request(`/codings/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteCoding: (id) => request(`/codings/${id}`, { method: 'DELETE' }),

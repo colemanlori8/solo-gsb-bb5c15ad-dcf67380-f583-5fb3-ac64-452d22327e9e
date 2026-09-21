@@ -5,6 +5,7 @@ import CodingForm from './components/CodingForm'
 import ConflictDialog from './components/ConflictDialog'
 import Sidebar from './components/Sidebar'
 import CooccurrenceView from './components/CooccurrenceView'
+import BatchCodingPanel from './components/BatchCodingPanel'
 
 export default function App() {
   const [docs, setDocs] = useState([])
@@ -72,7 +73,9 @@ export default function App() {
   }, [docId, loadDocument])
 
   const refresh = useCallback(async () => {
-    await Promise.all([loadDocument(docId), loadCodes()])
+    // 同步刷新文档列表中的编码计数
+    const [list] = await Promise.all([api.listDocuments(), loadDocument(docId), loadCodes()])
+    setDocs(list)
   }, [docId, loadDocument, loadCodes])
 
   // ---------- 编码共现统计（随当前文档与编码筛选同步） ----------
@@ -224,6 +227,25 @@ export default function App() {
   function handleLocateCoocSegment(seg) {
     setView('text')
     setPendingLocate({ start: seg.start, end: seg.end })
+  }
+
+  // 检索批量面板 → 定位某一命中区间（共现视图下先切回正文）
+  function handleLocateRange(range) {
+    if (view !== 'text') {
+      setView('text')
+      setPendingLocate(range)
+      return
+    }
+    setFlashRange(range)
+    scrollToRange(range)
+    setTimeout(() => setFlashRange(null), 1800)
+  }
+
+  // 检索批量编码提交：后端单事务校验并按 keep 写入，成功后刷新高亮与计数
+  async function handleBatchSubmit(payload) {
+    const result = await api.batchCreateCodings(payload)
+    await refresh()
+    return result
   }
 
   // 正文渲染完成后处理来自共现视图的待定位片段
@@ -383,6 +405,13 @@ export default function App() {
         </section>
 
         <div className="right-panel">
+          <BatchCodingPanel
+            key={docId}
+            documentId={docId}
+            codes={codebook}
+            onBatchSubmit={handleBatchSubmit}
+            onLocate={handleLocateRange}
+          />
           <CodingForm
             codes={codebook}
             content={doc.content}

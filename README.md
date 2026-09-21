@@ -31,6 +31,11 @@ docker compose up --build
   - **拆分 split**：沿新区间边界拆分外层编码；若新区间包含他者，则新区间自身绕开拆分；
   - **保留边界 keep**：不做调整，重叠 / 嵌套共存。
 - **编辑与删除**：侧栏标注列表支持定位（滚动 + 闪烁）、编辑（改区间或改编码，同样走冲突检测）、删除。
+- **检索批量编码**：右栏「检索批量编码」面板输入**字面关键词**（非正则、区分大小写）后，后端返回当前文档**全部命中**的稳定半开区间 `[start, end)`、上下文原文与重叠标注，**包含彼此重叠的命中**（如 `aa` 在 `aaa` 中命中两次）。前端支持逐项勾选、全选（与所选编码**完全相同的既有标注自动禁用并标记"已有"**）并选择一个**既有编码**后批量提交：
+  - 批量提交在**单个事务**中先逐项校验区间（区间在全文范围内、且区间原文必须与关键词一致），任一项非法即**整批回滚、不落库**，422 响应返回全部非法项明细；
+  - 与既有标注 `(文档, 编码, 起点, 终点)` **完全相同**的项记为**跳过**（`identical_existing`，批次内重复项记为 `duplicate_in_batch`），其余一律按 **keep（保留边界）** 写入，允许重叠 / 嵌套共存，不触发合并 / 拆分；
+  - 响应返回 `created` 与 `skipped` 明细及计数；提交后自动重新检索并**刷新正文高亮与编码计数**。该流程独立于单条拖选编码，**现有单条冲突预览 / 合并 / 拆分流程保持不变**。
+  - 对应 `GET /api/documents/{id}/search?q=…` 与 `POST /api/codings/batch`。
 - **编码筛选**：编码本复选框控制文本高亮、标注列表与共现矩阵的显示范围。
 - **编码共现视图**：正文区顶部切换到「编码共现」标签，按当前文档展示编码两两关系矩阵——
   - 计算口径：先分别**合并同一编码自身重叠或相邻（首尾相接）的半开区间**，再对每对编码求区间交集，保证共享字符不被重复计数；
@@ -62,12 +67,14 @@ npm run dev   # http://localhost:5173
 | GET | `/api/documents` | 文档列表 |
 | POST | `/api/documents` | 新建文档 `{title, content}` |
 | GET | `/api/documents/{id}` | 文档详情（含编码本与全部标注） |
+| GET | `/api/documents/{id}/search?q=关键词` | 字面关键词检索：返回全部命中（含彼此重叠）的稳定半开区间、上下文与重叠标注，超过 5000 条截断并返回 `truncated` |
 | GET | `/api/documents/{id}/cooccurrence` | 编码两两共现统计，可带 `?codes=1&codes=2` 按编码筛选；返回每对编码合并后的共现字符数、片段数与原文摘录 |
 | GET | `/api/documents/{id}/export` | 导出 JSON（附件下载） |
 | GET / POST | `/api/codes` | 编码本列表 / 新建（重名返回 409） |
 | PUT / DELETE | `/api/codes/{id}` | 重命名、改色 / 删除（级联删除标注） |
 | POST | `/api/codings/preview` | 冲突预览 `{document_id, code_id, start, end, exclude_id?}` |
 | POST | `/api/codings` | 创建标注，可带 `resolution: keep\|merge\|split` |
+| POST | `/api/codings/batch` | 批量编码 `{document_id, code_id, ranges:[{start,end,keyword}]}`；单事务逐项校验，完全相同的既有标注记为跳过、其余按 keep 写入，返回 `created`/`skipped` 明细；任一非法项整批回滚（422） |
 | PUT / DELETE | `/api/codings/{id}` | 修改（同样支持 resolution）/ 删除 |
 
 ## 项目结构
@@ -87,5 +94,5 @@ npm run dev   # http://localhost:5173
     ├── nginx.conf          # 静态托管 + /api 反向代理
     └── src/
         ├── App.jsx         # 状态编排与冲突决策流
-        └── components/     # TextView / CodingForm / ConflictDialog / Sidebar / CooccurrenceView
+        └── components/     # TextView / CodingForm / BatchCodingPanel / ConflictDialog / Sidebar / CooccurrenceView
 ```
